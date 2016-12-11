@@ -12,6 +12,8 @@ persistent = "0.0.6"
 maidsafe_utilities = "*"
 hyper = "*"
 mime_guess = "*"
+thread-id = "3.0.0"
+lazy_static = "*"
 
 # [dependencies.safe_core]
 # version = "0.22.*"

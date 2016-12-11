@@ -4,12 +4,15 @@ extern crate safe_core;
 extern crate maidsafe_utilities;
 extern crate hyper;
 extern crate mime_guess;
+extern crate thread_id;
+
+#[macro_use]
+extern crate lazy_static;
 
 use iron::prelude::*;
 use iron::status;
 use url::Host;
-
-
+use iron::Handler;
 
 use iron::headers::{Headers, ContentType};
 use iron::mime::{Mime, TopLevel, SubLevel};
@@ -23,6 +26,15 @@ use safe_core::nfs::directory_listing::DirectoryListing;
 use safe_core::nfs::helper::directory_helper::DirectoryHelper;
 use safe_core::nfs::metadata::directory_key::DirectoryKey;
 use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+
+
+
+static CLIENTSIZE: usize = 10;
+
+lazy_static! {
+    static ref CLIENTS: Mutex<HashMap<usize, Arc<Mutex<Client>>>> = Mutex::new(HashMap::new());
+}
 
 
 pub fn get_final_subdirectory(client: Arc<Mutex<Client>>,
@@ -74,13 +86,28 @@ fn fetch_file(client:  Arc<Mutex<Client>>,
 	reader.read(0, size).unwrap()
 }
 
+#[derive(Clone)]
+struct ProxyHandler { }
 
-fn main() {
+impl ProxyHandler {
+	fn new() -> Self{
+		ProxyHandler { }
+	}
 
-    maidsafe_utilities::log::init(true).unwrap();
+	fn get_client(&self) -> Arc<Mutex<Client>> {
+		let mut cache = CLIENTS.lock().unwrap();
+		// let's keep around up to 8 clients and distribute them kinda randomly..
+		let id = thread_id::get() % CLIENTSIZE;
+		println!("we are fetching for {}", id);
+		cache.entry(id)
+			 .or_insert_with(|| Arc::new(Mutex::new(Client::create_unregistered_client().unwrap())));
+		cache.get(&id).unwrap().clone()
+	}
+}
 
-    fn proxy(req: &mut Request) -> IronResult<Response> {
-		let client = Arc::new(Mutex::new(Client::create_unregistered_client().unwrap()));
+impl Handler for ProxyHandler {
+    fn handle(&self, req: &mut Request) -> IronResult<Response> {
+		let client = self.get_client();
     	let ref url = req.url;
     	if let Host::Domain(domain) = url.host() {
 
@@ -109,7 +136,7 @@ fn main() {
     		let mtype = get_mime_type(file_name.clone().rsplit(".").next().unwrap_or("html"));
 
     		// safe://invoice-app.nobackend-example/nobackend-examples/safenet/index.html
-
+    		// FIXME: add etag support!
     		let file = fetch_file(client, "nobackend-example", "invoice-app", path, file_name);
         	let mut resp = Response::with((status::Ok, file));
 			resp.headers.set(ContentType(mtype));
@@ -118,7 +145,24 @@ fn main() {
     		Ok(Response::with((status::NotFound, "Can't connect with IP")))
     	}
     }
+}
 
+
+
+fn main() {
+
+	fn kickstart_clients() {
+		let mut cache = CLIENTS.lock().unwrap();
+	    for i in 0..CLIENTSIZE {
+			cache.insert(i as usize, Arc::new(Mutex::new(Client::create_unregistered_client().unwrap())));
+	    }
+	}
+
+    maidsafe_utilities::log::init(true).unwrap();
+
+    let proxy = ProxyHandler::new();
     let _server = Iron::new(proxy).http("localhost:3000").unwrap();
     println!("On 3000");
+    kickstart_clients();
+    println!("clients kickstarted");
 }
