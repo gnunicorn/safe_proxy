@@ -1,3 +1,4 @@
+#[macro_use]
 extern crate iron;
 extern crate url;
 extern crate safe_core;
@@ -8,16 +9,15 @@ extern crate thread_id;
 
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate unwrap;
 
 use iron::prelude::*;
 use iron::status;
 use url::Host;
-use iron::Handler;
 
-use iron::headers::{Headers, ContentType};
-use iron::mime::{Mime, TopLevel, SubLevel};
+use iron::headers::ContentType;
 use mime_guess::get_mime_type;
-
 
 use safe_core::core::client::Client;
 use safe_core::dns::dns_operations::DnsOperations;
@@ -44,25 +44,21 @@ pub fn get_final_subdirectory(client: Arc<Mutex<Client>>,
 
     let dir_helper = DirectoryHelper::new(client);
 
-    let mut current_dir_listing = match starting_directory {
-        Some(directory_key) => {
-            dir_helper.get(directory_key).unwrap()
-        }
-        None => {
-            dir_helper.get_user_root_directory_listing().unwrap()
-        }
-    };
+    let mut current_dir_listing = unwrap!(match starting_directory {
+        Some(directory_key) => dir_helper.get(directory_key),
+        None => dir_helper.get_user_root_directory_listing()
+    });
 
     for it in tokens.iter().map(|s| s.to_string()) {
 
         current_dir_listing = {
-            let current_dir_metadata = current_dir_listing.get_sub_directories()
+            let current_dir_metadata = unwrap!(current_dir_listing.get_sub_directories()
                 .iter()
-                .find(|a| a.get_name() == it).unwrap();
-            dir_helper.get(current_dir_metadata.get_key()).unwrap()
+                .find(|a| a.get_name() == it));
+            unwrap!(dir_helper.get(current_dir_metadata.get_key()))
         };
     }
-
+ 
     current_dir_listing
 }
 
@@ -75,76 +71,74 @@ fn fetch_file(client:  Arc<Mutex<Client>>,
 			  path: Vec<&str>,
 			  file_name: &str) -> Vec<u8> {
 	let dns_operations = DnsOperations::new_unregistered(client.clone());
-    let directory_key = dns_operations.get_service_home_directory_key(long_name, service_name, None).unwrap();
+    let directory_key = unwrap!(dns_operations.get_service_home_directory_key(long_name, service_name, None));
     let file_dir = get_final_subdirectory(client.clone(), &path, Some(&directory_key));
-    let file = file_dir.find_file(&file_name).unwrap();
+    let file = unwrap!(file_dir.find_file(&file_name));
 
 
 	let mut file_helper = FileHelper::new(client);
-	let mut reader = file_helper.read(&file).unwrap();
+	let mut reader = unwrap!(file_helper.read(&file));
 	let size = reader.size();
-	reader.read(0, size).unwrap()
+	unwrap!(reader.read(0, size))
 }
 
-#[derive(Clone)]
-struct ProxyHandler { }
 
-impl ProxyHandler {
-	fn new() -> Self{
-		ProxyHandler { }
-	}
-
-	fn get_client(&self) -> Arc<Mutex<Client>> {
-		let mut cache = CLIENTS.lock().unwrap();
-		// let's keep around up to 8 clients and distribute them kinda randomly..
-		let id = thread_id::get() % CLIENTSIZE;
-		println!("we are fetching for {}", id);
-		cache.entry(id)
-			 .or_insert_with(|| Arc::new(Mutex::new(Client::create_unregistered_client().unwrap())));
-		cache.get(&id).unwrap().clone()
-	}
+fn get_client() -> Arc<Mutex<Client>> {
+	let mut cache = unwrap!(CLIENTS.lock());
+	// let's keep around up to 8 clients and distribute them kinda randomly..
+	let id = thread_id::get() % CLIENTSIZE;
+	println!("we are fetching for {}", id);
+	cache.entry(id)
+		 .or_insert_with(|| Arc::new(Mutex::new(Client::create_unregistered_client().unwrap())));
+	unwrap!(cache.get(&id)).clone()
 }
 
-impl Handler for ProxyHandler {
-    fn handle(&self, req: &mut Request) -> IronResult<Response> {
-		let client = self.get_client();
-    	let ref url = req.url;
-    	if let Host::Domain(domain) = url.host() {
 
-    		let mut domain_parts = domain.rsplit(".");
-    		let long_name : &str = domain_parts.next().unwrap();
-    		let service = {
+fn proxy_request(req: &mut Request) -> IronResult<Response> {
+	let client = get_client();
+	let ref url = req.url;
+	if let Host::Domain(domain) = url.host() {
+
+		let mut domain_parts = domain.rsplit(".");
+		let tld = domain_parts.next();
+		let (long_name, service) : (&str, String) = if tld.is_some()  {
+    		(iexpect!(domain_parts.next(), status::BadRequest), // long name
+			{
     			let mut services = domain_parts.collect::<Vec<&str>>();
-    			if services.len() == 0 {
-    				"www".to_string()
-    			} else {
+    			if services.len() > 0 {
+    				// put together service name
     				services.reverse();
     				services.join(".")
-    			}
-    		};
-
-
-    		let mut path = url.path().clone(); 
-    		let file_name = {
-    			let name = path.pop().unwrap_or("");
-    			if name == "" {
-    				"index.html"
     			} else {
-    				name
+    				// or default to 'www'
+    				"www".to_string()
     			}
-    		};
-    		let mtype = get_mime_type(file_name.clone().rsplit(".").next().unwrap_or("html"));
+    		})
+		} else {
+			("nobackend-example", "invoice-app".to_string()) 
+		};
 
-    		// safe://invoice-app.nobackend-example/nobackend-examples/safenet/index.html
-    		// FIXME: add etag support!
-    		let file = fetch_file(client, "nobackend-example", "invoice-app", path, file_name);
-        	let mut resp = Response::with((status::Ok, file));
-			resp.headers.set(ContentType(mtype));
-			Ok(resp)
-    	} else {
-    		Ok(Response::with((status::NotFound, "Can't connect with IP")))
-    	}
-    }
+
+		let mut path = url.path().clone(); 
+		let file_name = {
+			let name = path.pop().unwrap_or("");
+			if name == "" {
+				"index.html"
+			} else {
+				name
+			}
+		};
+		let mtype = get_mime_type(file_name.clone().rsplit(".").next().unwrap_or("html"));
+
+		// safe://invoice-app.nobackend-example/nobackend-examples/safenet/index.html
+		// FIXME: add etag support!
+		let file = fetch_file(client, &long_name, &service, path, file_name);
+    	let mut resp = Response::with((status::Ok, file));
+		resp.headers.set(ContentType(mtype));
+		Ok(resp)
+	} else {
+		Ok(Response::with((status::NotFound, "Can't connect with IP")))
+	}
 }
 
 
@@ -152,16 +146,15 @@ impl Handler for ProxyHandler {
 fn main() {
 
 	fn kickstart_clients() {
-		let mut cache = CLIENTS.lock().unwrap();
+		let mut cache = unwrap!(CLIENTS.lock());
 	    for i in 0..CLIENTSIZE {
 			cache.insert(i as usize, Arc::new(Mutex::new(Client::create_unregistered_client().unwrap())));
 	    }
 	}
 
-    maidsafe_utilities::log::init(true).unwrap();
+    unwrap!(maidsafe_utilities::log::init(true));
 
-    let proxy = ProxyHandler::new();
-    let _server = Iron::new(proxy).http("localhost:3000").unwrap();
+    let _server = unwrap!(Iron::new(proxy_request).http("localhost:3000"));
     println!("On 3000");
     kickstart_clients();
     println!("clients kickstarted");

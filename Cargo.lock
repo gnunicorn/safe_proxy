@@ -11,6 +11,7 @@ dependencies = [
  "router 0.0.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "safe_core 0.22.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "thread-id 3.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "unwrap 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "url 1.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
