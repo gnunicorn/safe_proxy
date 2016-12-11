@@ -1,0 +1,18 @@
+[package]
+name = "safe_proxy"
+version = "0.1.0"
+authors = ["Benjamin Kampmann <ben@gnunicorn.org>"]
+
+[dependencies]
+iron = "0.4.*"
+url = "*"
+safe_core = "0.22.*"
+router = "0.0.15"
+persistent = "0.0.6"
+maidsafe_utilities = "*"
+hyper = "*"
+mime_guess = "*"
+
+# [dependencies.safe_core]
+# version = "0.22.*"
+# features = ["use-mock-routing"]
