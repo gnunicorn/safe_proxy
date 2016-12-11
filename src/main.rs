@@ -28,16 +28,14 @@ use safe_core::nfs::metadata::directory_key::DirectoryKey;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
-
-
 static CLIENTSIZE: usize = 10;
 
 lazy_static! {
     static ref CLIENTS: Mutex<HashMap<usize, Arc<Mutex<Client>>>> = Mutex::new(HashMap::new());
+    static ref DOMAIN: String = std::env::var("DOMAIN").unwrap_or("localhost".to_string());
 }
 
-
-pub fn get_final_subdirectory(client: Arc<Mutex<Client>>,
+fn get_final_subdirectory(client: Arc<Mutex<Client>>,
                               tokens: &Vec<&str>,
                               starting_directory: Option<&DirectoryKey>)
                               -> DirectoryListing {
@@ -62,9 +60,6 @@ pub fn get_final_subdirectory(client: Arc<Mutex<Client>>,
     current_dir_listing
 }
 
-
-
-
 fn fetch_file(client:  Arc<Mutex<Client>>,
 			  long_name: &str,
 			  service_name: &str,
@@ -82,12 +77,10 @@ fn fetch_file(client:  Arc<Mutex<Client>>,
 	unwrap!(reader.read(0, size))
 }
 
-
 fn get_client() -> Arc<Mutex<Client>> {
 	let mut cache = unwrap!(CLIENTS.lock());
 	// let's keep around up to 8 clients and distribute them kinda randomly..
 	let id = thread_id::get() % CLIENTSIZE;
-	println!("we are fetching for {}", id);
 	cache.entry(id)
 		 .or_insert_with(|| Arc::new(Mutex::new(Client::create_unregistered_client().unwrap())));
 	unwrap!(cache.get(&id)).clone()
@@ -98,6 +91,19 @@ fn proxy_request(req: &mut Request) -> IronResult<Response> {
 	let client = get_client();
 	let ref url = req.url;
 	if let Host::Domain(domain) = url.host() {
+
+		if domain == DOMAIN.as_str() {
+			// direct access, ignoring the path, we serve our index.
+
+    		let mut resp = Response::with((status::Ok, format!(
+								include_str!("./index_template.html"),
+								domain=DOMAIN.as_str(),
+								css=include_str!("./styles.css")
+								)));
+			resp.headers.set(ContentType(get_mime_type("html")));
+			return Ok(resp)
+		}
+
 
 		let mut domain_parts = domain.rsplit(".");
 		let tld = domain_parts.next();
@@ -143,7 +149,7 @@ fn proxy_request(req: &mut Request) -> IronResult<Response> {
 
 
 
-fn main() {
+pub fn main() {
 
 	fn kickstart_clients() {
 		let mut cache = unwrap!(CLIENTS.lock());
@@ -152,10 +158,13 @@ fn main() {
 	    }
 	}
 
+	let port = std::env::var("PORT").unwrap_or("3000".to_string());
+
     unwrap!(maidsafe_utilities::log::init(true));
 
-    let _server = unwrap!(Iron::new(proxy_request).http("localhost:3000"));
-    println!("On 3000");
+    let _server = unwrap!(Iron::new(proxy_request)
+    	.http(format!("0.0.0.0:{}", port).as_str()));
+    println!("On {}", port);
     kickstart_clients();
     println!("clients kickstarted");
 }
